@@ -1,0 +1,568 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum CdkStatus {
+  ACTIVE
+  DISABLED
+  EXPIRED
+}
+
+enum WorkerStatus {
+  ONLINE
+  OFFLINE
+}
+
+enum WorkerPayoutMode {
+  POSTPAID
+  PREPAID
+}
+
+enum OrderStatus {
+  PENDING
+  ASSIGNED
+  CHECKING
+  NEED_REUPLOAD
+  COMPLETED
+  FAILED
+  CANCELLED
+  EXPIRED
+}
+
+enum OrderResult {
+  COMPLETED
+  PROBLEM
+  FAILED
+  CANCELLED
+  EXPIRED
+}
+
+enum OrderSource {
+  CDK
+  PUBLIC_SCAN
+}
+
+enum CompletedBy {
+  CUSTOMER
+  WORKER
+  SYSTEM
+}
+
+enum TelegramLoginPurpose {
+  WORKER
+  ADMIN
+  USER
+}
+
+enum TelegramLoginStatus {
+  PENDING
+  APPROVED
+  USED
+  EXPIRED
+}
+
+enum UpiExtractionStatus {
+  PENDING
+  GENERATING
+  READY
+  FAILED
+}
+
+enum SubscriptionCheckStatus {
+  IDLE
+  CHECKING
+  FAILED
+  VERIFIED
+}
+
+enum WorkerWithdrawalStatus {
+  PENDING
+  PAID
+  REJECTED
+  CANCELLED
+}
+
+enum WorkerWalletLedgerType {
+  ADMIN_ADVANCE
+  ADMIN_ADJUSTMENT
+  WITHDRAWAL_PAID
+}
+
+enum PublicUserWalletLedgerType {
+  CHAIN_DEPOSIT
+  CDK_REDEEM
+  ADMIN_ADJUSTMENT
+  SCAN_ORDER_FREEZE
+  SCAN_ORDER_REFUND
+  SCAN_ORDER_SPEND
+  WITHDRAWAL_FREEZE
+  WITHDRAWAL_REFUND
+  WITHDRAWAL_PAID
+}
+
+enum ChainDepositStatus {
+  CONFIRMED
+  IGNORED
+}
+
+enum PublicUserWithdrawalStatus {
+  PENDING
+  PAID
+  REJECTED
+  CANCELLED
+}
+
+enum PublicUserDepositOrderStatus {
+  PENDING
+  PAID
+  EXPIRED
+  CANCELLED
+}
+
+enum UpiGuardStatus {
+  ACTIVE
+  COMPLETED
+  EXPIRED
+  CANCELLED
+}
+
+model Cdk {
+  id          String    @id @default(cuid())
+  code        String    @unique
+  batchId     String?
+  amount      Decimal   @default(0) @db.Decimal(18, 2)
+  totalCount  Int
+  usedCount   Int       @default(0)
+  frozenCount Int       @default(0)
+  status      CdkStatus @default(ACTIVE)
+  remark      String?
+  expiresAt   DateTime?
+  redeemedByTelegramId   String?
+  redeemedByTelegramName String?
+  redeemedAt             DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  batch  CdkBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  orders Order[]
+
+  @@index([status])
+  @@index([batchId])
+  @@index([redeemedByTelegramId])
+  @@map("cdks")
+}
+
+model CdkBatch {
+  id         String   @id @default(cuid())
+  name       String?
+  keyCount   Int
+  amount     Decimal  @default(0) @db.Decimal(18, 2)
+  totalCount Int
+  remark     String?
+  createdAt  DateTime @default(now())
+  cdks       Cdk[]
+
+  @@index([createdAt])
+  @@map("cdk_batches")
+}
+
+model Worker {
+  id                      String       @id @default(cuid())
+  username                String       @unique
+  displayName             String
+  passwordHash            String
+  unitPrice               Decimal      @default(0) @db.Decimal(10, 2)
+  payoutMode              WorkerPayoutMode @default(POSTPAID)
+  binanceUserId           String?
+  telegramUserId          String?      @unique
+  telegramUsername        String?      @unique
+  status                  WorkerStatus @default(OFFLINE)
+  isDisabled              Boolean      @default(false)
+  autoAcceptEnabled       Boolean      @default(false)
+  autoAcceptNotifyEnabled Boolean      @default(false)
+  newOrderSoundEnabled    Boolean      @default(false)
+  lastSeenAt              DateTime?
+  createdAt               DateTime     @default(now())
+  updatedAt               DateTime     @updatedAt
+
+  activeOrders   WorkerActiveOrder[]
+  assignedOrders Order[]             @relation("AssignedOrders")
+  records        WorkerOrderRecord[]
+  walletLedgers  WorkerWalletLedger[]
+  withdrawals    WorkerWithdrawalRequest[]
+
+  @@index([status, autoAcceptEnabled])
+  @@index([telegramUserId])
+  @@index([binanceUserId])
+  @@map("workers")
+}
+
+model WorkerWalletLedger {
+  id        String                 @id @default(cuid())
+  workerId  String
+  type      WorkerWalletLedgerType
+  amount    Decimal                @db.Decimal(10, 2)
+  note      String?
+  createdBy String?
+  createdAt DateTime               @default(now())
+
+  worker Worker @relation(fields: [workerId], references: [id], onDelete: Cascade)
+
+  @@index([workerId, createdAt])
+  @@index([type])
+  @@map("worker_wallet_ledgers")
+}
+
+model WorkerWithdrawalRequest {
+  id                    String                 @id @default(cuid())
+  workerId              String
+  amount                Decimal                @db.Decimal(10, 2)
+  status                WorkerWithdrawalStatus @default(PENDING)
+  binanceUserIdSnapshot String
+  note                  String?
+  adminNote             String?
+  requestedAt           DateTime               @default(now())
+  processedAt           DateTime?
+  processedBy           String?
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+
+  worker Worker @relation(fields: [workerId], references: [id], onDelete: Cascade)
+
+  @@index([workerId, status])
+  @@index([status, requestedAt])
+  @@map("worker_withdrawal_requests")
+}
+
+model TelegramLoginChallenge {
+  id               String               @id @default(cuid())
+  codeHash         String               @unique
+  purpose          TelegramLoginPurpose
+  status           TelegramLoginStatus  @default(PENDING)
+  telegramUserId   String?
+  telegramUsername String?
+  workerId         String?
+  expiresAt        DateTime
+  approvedAt       DateTime?
+  usedAt           DateTime?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  @@index([telegramUserId, purpose])
+  @@index([status, expiresAt])
+  @@index([expiresAt])
+  @@map("telegram_login_challenges")
+}
+
+model TelegramLoginAttempt {
+  id               String   @id @default(cuid())
+  telegramUserId   String
+  telegramUsername String?
+  code             String?
+  success          Boolean  @default(false)
+  attemptedAt      DateTime @default(now())
+
+  @@index([telegramUserId, attemptedAt])
+  @@map("telegram_login_attempts")
+}
+
+model SystemSetting {
+  key       String   @id
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("system_settings")
+}
+
+model PublicUpiExtractActivity {
+  id                     Int       @id @default(autoincrement())
+  jobId                  String    @unique
+  status                 String
+  source                 String    @default("direct")
+  channel                String    @default("public")
+  extractMethod          String    @default("upi")
+  publicUserTelegramId   String?
+  publicUserTelegramName String?
+  accountEmail           String?
+  accountPhone           String?
+  subscriptionPlan       String?
+  subscriptionIsPlus     Boolean?
+  subscriptionCheckedAt  DateTime?
+  subscriptionCheckError String?
+  error                  String?
+  resultPaymentUrl       String?
+  resultExpiresAt        DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  @@index([createdAt])
+  @@index([status])
+  @@index([source])
+  @@index([channel, createdAt])
+  @@index([channel, status])
+  @@index([extractMethod, createdAt])
+  @@index([publicUserTelegramId, createdAt])
+  @@map("public_upi_extract_activities")
+}
+
+model PublicUserWallet {
+  id                String   @id @default(cuid())
+  telegramUserId    String   @unique
+  telegramUsername  String?
+  availableBalance  Decimal  @default(0) @db.Decimal(18, 6)
+  frozenBalance     Decimal  @default(0) @db.Decimal(18, 6)
+  totalDeposited    Decimal  @default(0) @db.Decimal(18, 6)
+  totalSpent        Decimal  @default(0) @db.Decimal(18, 6)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  ledgers PublicUserWalletLedger[]
+  withdrawals PublicUserWithdrawalRequest[]
+  depositOrders PublicUserDepositOrder[]
+
+  @@index([telegramUserId])
+  @@map("public_user_wallets")
+}
+
+model PublicUserWithdrawalRequest {
+  id                String                     @id @default(cuid())
+  walletId          String
+  telegramUserId    String
+  telegramUsername  String?
+  amount            Decimal                    @db.Decimal(18, 6)
+  fee               Decimal                    @db.Decimal(18, 6)
+  totalFrozen       Decimal                    @db.Decimal(18, 6)
+  status            PublicUserWithdrawalStatus @default(PENDING)
+  chain             String                     @default("BSC")
+  tokenSymbol       String                     @default("USDT")
+  withdrawalAddress String
+  note              String?
+  adminNote         String?
+  requestedAt       DateTime                   @default(now())
+  processedAt       DateTime?
+  processedBy       String?
+  createdAt         DateTime                   @default(now())
+  updatedAt         DateTime                   @updatedAt
+
+  wallet PublicUserWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@index([walletId, requestedAt])
+  @@index([telegramUserId, status])
+  @@index([status, requestedAt])
+  @@index([withdrawalAddress])
+  @@map("public_user_withdrawal_requests")
+}
+
+model PublicUserDepositAddress {
+  id              String   @id @default(cuid())
+  telegramUserId  String   @unique
+  telegramUsername String?
+  chain           String   @default("BSC")
+  address         String   @unique
+  derivationIndex Int      @unique
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([address])
+  @@index([telegramUserId])
+  @@map("public_user_deposit_addresses")
+}
+
+model PublicUserDepositOrder {
+  id               String                       @id @default(cuid())
+  orderNo          String                       @unique
+  walletId         String
+  telegramUserId   String
+  telegramUsername String?
+  baseAmount       Decimal                      @db.Decimal(18, 2)
+  payAmount        Decimal                      @db.Decimal(18, 2)
+  status           PublicUserDepositOrderStatus @default(PENDING)
+  chain            String                       @default("BSC")
+  tokenSymbol      String                       @default("USDT")
+  depositAddress   String
+  txHash           String?
+  logIndex         Int?
+  fromAddress      String?
+  blockNumber      Int?
+  confirmations    Int?
+  expiresAt        DateTime
+  paidAt           DateTime?
+  createdAt        DateTime                     @default(now())
+  updatedAt        DateTime                     @updatedAt
+
+  wallet PublicUserWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@unique([txHash, logIndex])
+  @@index([walletId, createdAt])
+  @@index([telegramUserId, createdAt])
+  @@index([status, expiresAt])
+  @@index([depositAddress, status])
+  @@index([payAmount, status, expiresAt])
+  @@map("public_user_deposit_orders")
+}
+
+model PublicChainDeposit {
+  id              String             @id @default(cuid())
+  telegramUserId  String
+  telegramUsername String?
+  chain           String             @default("BSC")
+  tokenSymbol     String             @default("USDT")
+  tokenContract   String
+  txHash          String
+  logIndex        Int
+  blockNumber     Int
+  fromAddress     String
+  toAddress       String
+  amount          Decimal            @db.Decimal(18, 6)
+  confirmations   Int
+  status          ChainDepositStatus @default(CONFIRMED)
+  creditedAt      DateTime?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  @@unique([txHash, logIndex])
+  @@index([telegramUserId, createdAt])
+  @@index([toAddress, blockNumber])
+  @@index([blockNumber])
+  @@index([status])
+  @@map("public_chain_deposits")
+}
+
+model PublicUserWalletLedger {
+  id             String                     @id @default(cuid())
+  walletId       String
+  telegramUserId String
+  type           PublicUserWalletLedgerType
+  availableDelta Decimal                    @default(0) @db.Decimal(18, 6)
+  frozenDelta    Decimal                    @default(0) @db.Decimal(18, 6)
+  orderId        String?
+  referenceId    String?
+  note           String?
+  createdAt      DateTime                   @default(now())
+
+  wallet PublicUserWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@index([walletId, createdAt])
+  @@index([telegramUserId, createdAt])
+  @@index([type])
+  @@index([orderId])
+  @@index([referenceId])
+  @@map("public_user_wallet_ledgers")
+}
+
+model UpiGuardTask {
+  id                  String         @id @default(cuid())
+  guardId             String         @unique
+  credentialEncrypted String         @db.Text
+  credentialHash      String?
+  status              UpiGuardStatus @default(ACTIVE)
+  expiresAt           DateTime
+  lastUsedAt          DateTime?
+  useCount            Int            @default(0)
+  lastError           String?
+  completedAt         DateTime?
+  purgedAt            DateTime?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  @@index([status, expiresAt])
+  @@index([credentialHash])
+  @@map("upi_guard_tasks")
+}
+
+model Order {
+  id               String       @id @default(cuid())
+  orderNo          String       @unique
+  source           OrderSource  @default(CDK)
+  cdkId            String?
+  publicUserTelegramId String?
+  publicUserTelegramName String?
+  scanPrice        Decimal      @default(0) @db.Decimal(10, 2)
+  qrImageUrl       String
+  qrVersion        Int          @default(1)
+  qrDecodedText    String?
+  qrIsUpi          Boolean?
+  paymentUrl       String?
+  sessionCredentialEncrypted String?
+  sessionCredentialHash String?
+  upiExtractionStatus UpiExtractionStatus @default(PENDING)
+  upiExtractError String?
+  upiExtractedAt DateTime?
+  upiExpiresAt DateTime?
+  subscriptionCheckStatus SubscriptionCheckStatus @default(IDLE)
+  subscriptionCheckRounds Int          @default(0)
+  subscriptionCheckAttemptCount Int    @default(0)
+  subscriptionCheckLastPlan String?
+  subscriptionCheckLastError String?
+  subscriptionCheckedAt DateTime?
+  customerTokenHash String?
+  holdsFrozenCount Boolean      @default(true)
+  status           OrderStatus  @default(PENDING)
+  customerNote     String?
+  problemReason    String?
+  completedBy      CompletedBy?
+  assignedWorkerId String?
+  assignedAt       DateTime?
+  completedAt      DateTime?
+  failedAt         DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  cdk            Cdk?                @relation(fields: [cdkId], references: [id], onDelete: Restrict)
+  assignedWorker Worker?             @relation("AssignedOrders", fields: [assignedWorkerId], references: [id], onDelete: SetNull)
+  activeEntry    WorkerActiveOrder?
+  records        WorkerOrderRecord[]
+
+  @@index([status, createdAt])
+  @@index([source, status, createdAt])
+  @@index([assignedWorkerId, status])
+  @@index([cdkId])
+  @@index([publicUserTelegramId, createdAt])
+  @@index([customerTokenHash])
+  @@index([sessionCredentialHash])
+  @@index([upiExtractionStatus])
+  @@index([subscriptionCheckStatus])
+  @@map("orders")
+}
+
+model WorkerActiveOrder {
+  id        String   @id @default(cuid())
+  workerId  String
+  orderId   String   @unique
+  createdAt DateTime @default(now())
+
+  worker Worker @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  order  Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([workerId, orderId])
+  @@index([workerId])
+  @@map("worker_active_orders")
+}
+
+model WorkerOrderRecord {
+  id                String      @id @default(cuid())
+  workerId          String
+  orderId           String
+  result            OrderResult
+  note              String?
+  unitPriceSnapshot Decimal     @default(0) @db.Decimal(10, 2)
+  settledAt         DateTime?
+  settledBy         String?
+  completedAt       DateTime    @default(now())
+  createdAt         DateTime    @default(now())
+
+  worker Worker @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  order  Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([workerId, completedAt])
+  @@index([workerId, result, settledAt])
+  @@index([orderId])
+  @@index([settledAt])
+  @@map("worker_order_records")
+}
